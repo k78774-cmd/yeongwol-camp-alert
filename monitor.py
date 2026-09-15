@@ -1,5 +1,7 @@
 import os
 import re
+import json
+import base64
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -9,6 +11,11 @@ BASE_URL = "https://www.sd.go.kr/booking/rcrtfrFcltyResveInfoWebRegistCalendarVi
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY")
+
+STATE_FILE = "alert_state.json"
 
 FACILITIES = [
     "Room-1", "Room-2", "Room-3", "Room-4",
@@ -61,17 +68,17 @@ def check_month(year, month):
 
     results = []
 
-    # 달력의 모든 날짜 영역을 찾음
     for cell in soup.find_all(["td", "div"]):
 
         text = cell.get_text(" ", strip=True)
 
-        # 시설명이 하나라도 없으면 건너뜀
         if not any(facility in text for facility in FACILITIES):
             continue
 
-        # 날짜 찾기
-        date_match = re.search(r"(^|\s)([1-9]|[12][0-9]|3[01])(\s|$)", text)
+        date_match = re.search(
+            r"(^|\s)([1-9]|[12][0-9]|3[01])(\s|$)",
+            text
+        )
 
         if not date_match:
             continue
@@ -87,7 +94,6 @@ def check_month(year, month):
         if date_obj.weekday() != 5:
             continue
 
-        # 해당 날짜 영역 안의 시설 링크 확인
         for link in cell.find_all("a"):
 
             facility_name = link.get_text(" ", strip=True)
@@ -98,7 +104,6 @@ def check_month(year, month):
             link_class = " ".join(link.get("class", []))
             link_text = link.get_text(" ", strip=True)
 
-            # 예약불가 표시로 판단되는 경우 제외
             combined = (
                 link_class + " " +
                 str(link.get("aria-disabled", "")) + " " +
@@ -125,6 +130,104 @@ def check_month(year, month):
     return results
 
 
+def load_previous_state():
+    """
+    GitHub 저장소에 저장된 이전 예약 상태를 가져온다.
+    파일이 없으면 빈 상태로 시작한다.
+    """
+
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        print("GitHub 상태 저장용 환경변수가 없습니다.")
+        return set(), None
+
+    url = (
+        f"https://api.github.com/repos/"
+        f"{GITHUB_REPOSITORY}/contents/{STATE_FILE}"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=20
+    )
+
+    if response.status_code == 404:
+        return set(), None
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    content = base64.b64decode(
+        data["content"]
+    ).decode("utf-8")
+
+    state = json.loads(content)
+
+    previous = set(state.get("available", []))
+
+    return previous, data["sha"]
+
+
+def save_current_state(current_results, sha=None):
+    """
+    현재 예약 가능 상태를 GitHub 저장소에 기록한다.
+    """
+
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        print("GitHub 상태 저장용 환경변수가 없습니다.")
+        return
+
+    url = (
+        f"https://api.github.com/repos/"
+        f"{GITHUB_REPOSITORY}/contents/{STATE_FILE}"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+
+    state = {
+        "available": sorted(current_results)
+    }
+
+    content = json.dumps(
+        state,
+        ensure_ascii=False,
+        indent=2
+    )
+
+    encoded_content = base64.b64encode(
+        content.encode("utf-8")
+    ).decode("utf-8")
+
+    payload = {
+        "message": "예약 상태 업데이트",
+        "content": encoded_content,
+        "branch": "main"
+    }
+
+    if sha:
+        payload["sha"] = sha
+
+    response = requests.put(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    print("예약 상태를 GitHub에 저장했습니다.")
+
+
 def main():
 
     today = datetime.now()
@@ -141,20 +244,47 @@ def main():
         months.append((today.year, today.month + 1))
 
     all_results = []
+    errors = []
 
     for year, month in months:
+
         try:
             results = check_month(year, month)
             all_results.extend(results)
 
         except Exception as e:
-            print(f"{year}-{month} 확인 오류: {e}")
+            error_message = f"{year}-{month} 확인 오류: {e}"
+            print(error_message)
+            errors.append(error_message)
 
-    if all_results:
+    # 중복 제거
+    current_results = set(
+        f"{date}|{facility}"
+        for date, facility in all_results
+    )
+
+    # 홈페이지 확인에 오류가 있으면
+    # 잘못된 상태로 기존 기록을 덮어쓰지 않는다.
+    if errors:
+        print("일부 월 확인에 오류가 있어 예약 상태를 업데이트하지 않습니다.")
+        return
+
+    # 이전 상태 불러오기
+    previous_results, state_sha = load_previous_state()
+
+    # 새롭게 예약 가능해진 시설만 추출
+    newly_available = current_results - previous_results
+
+    if newly_available:
+
+        sorted_results = sorted(newly_available)
 
         message = "🚨 영월캠프 예약 가능 알림 🚨\n\n"
 
-        for date, facility in all_results:
+        for item in sorted_results:
+
+            date, facility = item.split("|", 1)
+
             message += f"📅 {date} (토)\n"
             message += f"🏕 {facility}\n\n"
 
@@ -165,7 +295,17 @@ def main():
         print(message)
 
     else:
-        print("현재 예약 가능한 토요일 시설이 없습니다.")
+
+        if current_results:
+            print("예약 가능한 시설은 있지만 이미 알림을 보낸 상태입니다.")
+        else:
+            print("현재 예약 가능한 토요일 시설이 없습니다.")
+
+    # 현재 상태 저장
+    save_current_state(
+        current_results,
+        state_sha
+    )
 
 
 if __name__ == "__main__":
