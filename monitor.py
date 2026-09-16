@@ -113,3 +113,6 @@ def check_month(year, month):
 
     # 진단용이므로 예약 상태를 변경하지 않음
     return []
+if __name__ == "__main__":
+    check_month(2026, 9)
+    check_month(2026, 10)
