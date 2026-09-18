@@ -58,6 +58,36 @@ FACILITIES = {
 
 
 # ============================================================
+# 진단용 설정
+#
+# True이면 평일에도 시설 상태를 일부 출력한다.
+# Telegram 알림은 여전히 토요일만 한다.
+# ============================================================
+
+DEBUG_WEEKDAY = True
+
+
+# ============================================================
+# HTTP 기본 헤더
+#
+# 캐시 방지를 위해 no-cache 추가
+# ============================================================
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/138.0 Safari/537.36"
+    ),
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+# ============================================================
 # Telegram 메시지 보내기
 # ============================================================
 
@@ -74,6 +104,7 @@ def send_telegram(message):
             "chat_id": CHAT_ID,
             "text": message
         },
+        headers=HEADERS,
         timeout=30
     )
 
@@ -82,16 +113,21 @@ def send_telegram(message):
 
 # ============================================================
 # 월별 예약 페이지 URL
+#
+# cachebuster를 추가해서 이전 페이지가 남지 않도록 한다.
 # ============================================================
 
 def get_month_url(year, month):
+
+    cachebuster = str(int(datetime.now().timestamp() * 1000))
 
     params = {
         "key": "4865",
         "searchMonth": month,
         "searchYear": year,
         "searchSiteId": "100",
-        "siteId": "100"
+        "siteId": "100",
+        "_cache": cachebuster,
     }
 
     return BASE_URL + "?" + urlencode(params)
@@ -117,6 +153,7 @@ def normalize(text):
 def is_saturday(year, month, day):
 
     try:
+
         date_obj = datetime(
             year,
             month,
@@ -124,22 +161,26 @@ def is_saturday(year, month, day):
         )
 
     except ValueError:
+
         return False
 
     # 월요일 = 0
     # 화요일 = 1
-    # ...
+    # 수요일 = 2
+    # 목요일 = 3
+    # 금요일 = 4
     # 토요일 = 5
+    # 일요일 = 6
+
     return date_obj.weekday() == 5
 
 
 # ============================================================
-# 달력 칸에서 날짜 찾기
+# 날짜 찾기
 # ============================================================
 
 def find_day_number(cell):
 
-    # 날짜를 나타내는 숫자를 찾는다.
     text = normalize(
         cell.get_text(
             " ",
@@ -153,16 +194,42 @@ def find_day_number(cell):
     )
 
     if not numbers:
+
         return None
 
     return int(numbers[0])
 
 
 # ============================================================
-# 예약 가능 여부 확인
+# 시설명 정리
+#
+# 사이트에서 줄바꿈이나 공백이 들어오는 경우를 대비한다.
 # ============================================================
 
-def facility_is_available(element):
+def normalize_facility_name(text):
+
+    text = normalize(text)
+
+    # 공백 제거
+    text_no_space = text.replace(" ", "")
+
+    # 정확한 시설명 찾기
+    for facility in FACILITIES:
+
+        if text == facility:
+            return facility
+
+        if text_no_space == facility.replace(" ", ""):
+            return facility
+
+    return None
+
+
+# ============================================================
+# HTML 요소의 상태를 사람이 보기 좋게 설명
+# ============================================================
+
+def get_element_status(element):
 
     classes = " ".join(
         element.get(
@@ -190,14 +257,48 @@ def facility_is_available(element):
             "title",
             ""
         )
-    ).lower()
+    )
 
     onclick = str(
         element.get(
             "onclick",
             ""
         )
-    ).lower()
+    )
+
+    element_text = normalize(
+        element.get_text(
+            " ",
+            strip=True
+        )
+    )
+
+    return {
+        "classes": classes,
+        "aria_disabled": aria_disabled,
+        "disabled": disabled,
+        "title": title,
+        "onclick": onclick,
+        "text": element_text,
+    }
+
+
+# ============================================================
+# 예약 가능 여부 확인
+#
+# 기존의 p-on만 보는 방식에서 확장
+# ============================================================
+
+def facility_is_available(element):
+
+    info = get_element_status(element)
+
+    classes = info["classes"]
+    aria_disabled = info["aria_disabled"]
+    disabled = info["disabled"]
+    title = info["title"].lower()
+    onclick = info["onclick"].lower()
+    element_text = info["text"].lower()
 
     combined = " ".join(
         [
@@ -205,12 +306,13 @@ def facility_is_available(element):
             aria_disabled,
             disabled,
             title,
-            onclick
+            onclick,
+            element_text
         ]
     )
 
     # --------------------------------------------------------
-    # 예약 불가 상태
+    # 명확한 예약 불가 상태
     # --------------------------------------------------------
 
     unavailable_patterns = [
@@ -223,7 +325,7 @@ def facility_is_available(element):
         "마감",
         "disabled",
         "unavailable",
-        "closed"
+        "closed",
     ]
 
     for word in unavailable_patterns:
@@ -232,7 +334,7 @@ def facility_is_available(element):
             return False
 
     # --------------------------------------------------------
-    # 명확한 disabled 처리
+    # disabled 속성
     # --------------------------------------------------------
 
     if aria_disabled == "true":
@@ -242,20 +344,49 @@ def facility_is_available(element):
         return False
 
     # --------------------------------------------------------
-    # p-on이면 예약 가능
+    # 예약 가능 표시
+    #
+    # 현재 확인된 사이트 구조에서 p-on을 우선 인정
     # --------------------------------------------------------
 
     if "p-on" in classes:
         return True
 
     # --------------------------------------------------------
-    # onclick이 있으면 예약 가능한 버튼일 가능성이 높음
+    # onclick이 실제 예약 동작을 가지고 있으면
+    # 예약 가능한 시설일 가능성이 높다.
     # --------------------------------------------------------
 
     if onclick:
         return True
 
     return False
+
+
+# ============================================================
+# 요소 상태를 출력
+#
+# 문제 발생 시 실제 HTML 상태를 확인하기 위한 진단
+# ============================================================
+
+def print_debug_element(
+    date_string,
+    facility_name,
+    element
+):
+
+    info = get_element_status(element)
+
+    print(
+        "    [진단] "
+        f"{date_string} "
+        f"{facility_name} "
+        f"| class={info['classes']} "
+        f"| disabled={info['disabled']} "
+        f"| aria-disabled={info['aria_disabled']} "
+        f"| title={info['title']} "
+        f"| onclick={'있음' if info['onclick'] else '없음'}"
+    )
 
 
 # ============================================================
@@ -280,17 +411,13 @@ def check_month(year, month):
         f"URL : {url}"
     )
 
+    # --------------------------------------------------------
+    # 홈페이지 요청
+    # --------------------------------------------------------
+
     response = requests.get(
         url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 "
-                "(Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/138.0 Safari/537.36"
-            )
-        },
+        headers=HEADERS,
         timeout=60
     )
 
@@ -300,12 +427,21 @@ def check_month(year, month):
 
     response.raise_for_status()
 
+    # --------------------------------------------------------
+    # HTML 분석
+    # --------------------------------------------------------
+
     soup = BeautifulSoup(
         response.text,
         "html.parser"
     )
 
     results = []
+
+    # 진단용
+    weekday_available_count = 0
+
+    saturday_count = 0
 
     # ========================================================
     # 실제 달력은 td 단위로 확인
@@ -320,25 +456,23 @@ def check_month(year, month):
             )
         )
 
+        # ----------------------------------------------------
         # 시설명이 하나라도 들어있는 달력 칸인지 확인
+        # ----------------------------------------------------
+
         if not any(
             facility in text
             for facility in FACILITIES
         ):
             continue
 
+        # ----------------------------------------------------
         # 날짜 찾기
+        # ----------------------------------------------------
+
         day = find_day_number(cell)
 
         if day is None:
-            continue
-
-        # 토요일만 확인
-        if not is_saturday(
-            year,
-            month,
-            day
-        ):
             continue
 
         date_string = (
@@ -347,26 +481,34 @@ def check_month(year, month):
             f"{day:02d}"
         )
 
-        print(
-            f"토요일 발견 : {date_string}"
+        saturday = is_saturday(
+            year,
+            month,
+            day
         )
 
-        # ====================================================
-        # 핵심
-        #
-        # 기존 코드는 a 태그만 확인했음.
-        #
-        # 실제 사이트는 예약 시설을 button으로 표시하기
-        # 때문에 button + a 둘 다 확인한다.
-        # ====================================================
+        if saturday:
+
+            saturday_count += 1
+
+            print()
+            print(
+                f"토요일 발견 : {date_string}"
+            )
+
+        # ----------------------------------------------------
+        # 시설 버튼/링크 확인
+        # ----------------------------------------------------
 
         elements = cell.find_all(
             ["button", "a"]
         )
 
+        cell_available = []
+
         for element in elements:
 
-            facility_name = normalize(
+            facility_name = normalize_facility_name(
                 element.get_text(
                     " ",
                     strip=True
@@ -374,36 +516,97 @@ def check_month(year, month):
             )
 
             # 대상 시설이 아니면 무시
-            if facility_name not in FACILITIES:
+            if facility_name is None:
                 continue
 
-            # 예약 가능하지 않으면 무시
-            if not facility_is_available(
+            available = facility_is_available(
                 element
-            ):
-                continue
-
-            result = (
-                date_string,
-                facility_name
             )
 
-            if result not in results:
+            # ------------------------------------------------
+            # 평일 진단
+            #
+            # 평일에도 실제 예약 가능한 시설이 있는지 확인
+            # ------------------------------------------------
 
-                results.append(result)
+            if not saturday and DEBUG_WEEKDAY:
 
-                print(
-                    f"  [예약 가능] "
-                    f"{date_string} "
-                    f"{facility_name}"
+                if available:
+
+                    weekday_available_count += 1
+
+                    print_debug_element(
+                        date_string,
+                        facility_name,
+                        element
+                    )
+
+            # ------------------------------------------------
+            # 토요일
+            # ------------------------------------------------
+
+            if saturday:
+
+                # 상태 진단
+                print_debug_element(
+                    date_string,
+                    facility_name,
+                    element
                 )
 
-    # 중복 제거 + 날짜/시설명 정렬
+                if available:
+
+                    result = (
+                        date_string,
+                        facility_name
+                    )
+
+                    if result not in cell_available:
+
+                        cell_available.append(
+                            result
+                        )
+
+        # ----------------------------------------------------
+        # 토요일 예약 가능 시설 추가
+        # ----------------------------------------------------
+
+        if saturday:
+
+            for result in cell_available:
+
+                if result not in results:
+
+                    results.append(result)
+
+                    print(
+                        f"  [예약 가능] "
+                        f"{result[0]} "
+                        f"{result[1]}"
+                    )
+
+    # ========================================================
+    # 월별 결과
+    # ========================================================
+
     results = sorted(
         set(results)
     )
 
     print()
+    print(
+        f"{year}-{month:02d} "
+        f"토요일 수 : {saturday_count}개"
+    )
+
+    if DEBUG_WEEKDAY:
+
+        print(
+            f"{year}-{month:02d} "
+            f"평일에서 발견한 예약 가능 시설 요소 : "
+            f"{weekday_available_count}개"
+        )
+
     print(
         f"{year}-{month:02d} "
         f"토요일 예약 가능 시설 : "
@@ -420,15 +623,19 @@ def check_month(year, month):
 def load_previous_state():
 
     if not GITHUB_TOKEN:
+
         print(
             "GITHUB_TOKEN 없음"
         )
+
         return []
 
     if not GITHUB_REPOSITORY:
+
         print(
             "GITHUB_REPOSITORY 없음"
         )
+
         return []
 
     url = (
@@ -453,9 +660,11 @@ def load_previous_state():
 
     # 파일이 아직 없으면 빈 상태
     if response.status_code == 404:
+
         print(
             "기존 예약 상태 파일 없음"
         )
+
         return []
 
     response.raise_for_status()
@@ -490,15 +699,19 @@ def save_current_state(
 ):
 
     if not GITHUB_TOKEN:
+
         print(
             "GITHUB_TOKEN 없음 → 상태 저장 생략"
         )
+
         return
 
     if not GITHUB_REPOSITORY:
+
         print(
             "GITHUB_REPOSITORY 없음 → 상태 저장 생략"
         )
+
         return
 
     url = (
@@ -605,6 +818,7 @@ def get_target_months():
     else:
 
         next_year = current_year
+
         next_month = (
             current_month + 1
         )
@@ -629,13 +843,15 @@ def main():
 
     print()
     print("=" * 70)
+
     print(
         "영월캠프 예약 알림 프로그램"
     )
+
     print("=" * 70)
 
     print(
-        "조건 : 토요일만"
+        "조건 : 토요일만 Telegram 알림"
     )
 
     print(
@@ -650,11 +866,15 @@ def main():
     )
 
     print(
-        "상태 : 예약 가능한 시설만"
+        "상태 : 예약 가능한 시설"
     )
 
     print(
         "기간 : 현재 월 + 다음 월"
+    )
+
+    print(
+        "평일 : 상태 진단만 실시"
     )
 
     print("=" * 70)
@@ -740,9 +960,11 @@ def main():
 
     print()
     print("=" * 70)
+
     print(
-        "현재 예약 가능 상태"
+        "현재 토요일 예약 가능 상태"
     )
+
     print("=" * 70)
 
     if current_state:
@@ -757,7 +979,7 @@ def main():
     else:
 
         print(
-            "현재 예약 가능한 시설 없음"
+            "현재 토요일 예약 가능한 시설 없음"
         )
 
     # --------------------------------------------------------
@@ -778,19 +1000,31 @@ def main():
         for item in current_state
     )
 
-    # --------------------------------------------------------
-    # 새롭게 예약 가능해진 시설
-    # --------------------------------------------------------
+    # ========================================================
+    # 핵심
+    #
+    # 이전에는 없었고
+    # 지금은 있으면 신규 예약 가능
+    #
+    # 예약가능 → 예약불가 → 예약가능
+    # 이 경우에도 다시 알림
+    # ========================================================
 
     newly_available = sorted(
         current_set - previous_set
     )
 
+    # ========================================================
+    # 결과 출력
+    # ========================================================
+
     print()
     print("=" * 70)
+
     print(
         "새롭게 예약 가능해진 시설"
     )
+
     print("=" * 70)
 
     if newly_available:
@@ -808,9 +1042,9 @@ def main():
             "새롭게 예약 가능해진 시설 없음"
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # Telegram 알림
-    # --------------------------------------------------------
+    # ========================================================
 
     if newly_available:
 
@@ -832,7 +1066,7 @@ def main():
             message_lines.append("")
 
         message_lines.append(
-            "토요일만 확인"
+            "토요일만 알림"
         )
 
         message_lines.append(
@@ -861,9 +1095,11 @@ def main():
                 f"Telegram 전송 실패 : {e}"
             )
 
-            # Telegram 실패 시에는 상태를
-            # 저장하지 않는다.
+            # ------------------------------------------------
+            # Telegram 실패 시 상태를 저장하지 않는다.
             # 다음 실행 때 다시 알림을 받을 수 있게 한다.
+            # ------------------------------------------------
+
             return
 
     else:
@@ -875,6 +1111,8 @@ def main():
 
     # --------------------------------------------------------
     # 현재 상태 저장
+    #
+    # 알림 성공 후 저장
     # --------------------------------------------------------
 
     save_current_state(
@@ -883,9 +1121,11 @@ def main():
 
     print()
     print("=" * 70)
+
     print(
         "예약 확인 완료"
     )
+
     print("=" * 70)
 
 
