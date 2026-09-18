@@ -416,9 +416,10 @@ def check_month(year, month):
     # --------------------------------------------------------
 
     response = requests.get(
-        url,
-        headers=HEADERS,
-        timeout=60
+    url,
+    headers=HEADERS,
+    timeout=60,
+    verify=False
     )
 
     print(
