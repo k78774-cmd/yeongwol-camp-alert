@@ -5,7 +5,7 @@ import base64
 import requests
 
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
 
 
@@ -742,13 +742,19 @@ def save_current_state(
     sha = None
 
     if get_response.status_code == 200:
-
-        sha = get_response.json().get(
-            "sha"
+        remote = get_response.json()
+        sha = remote["sha"]
+        # 같은 상태를 매번 다시 commit하지 않는다. (기존에는 실행마다 커밋 발생)
+        existing = json.loads(
+            base64.b64decode(remote["content"]).decode("utf-8")
         )
+        if {tuple(item) for item in existing} == {
+            tuple(item) for item in current_state
+        }:
+            print("예약 상태 변경 없음 → GitHub 저장 생략")
+            return
 
     elif get_response.status_code != 404:
-
         get_response.raise_for_status()
 
     # --------------------------------------------------------
@@ -803,7 +809,8 @@ def save_current_state(
 
 def get_target_months():
 
-    now = datetime.now()
+    # GitHub runner는 UTC이므로 한국시간 기준 월을 사용한다.
+    now = datetime.now(timezone(timedelta(hours=9)))
 
     current_year = now.year
     current_month = now.month
@@ -949,7 +956,8 @@ def main():
             "그대로 유지합니다."
         )
 
-        return
+        # 실패를 성공으로 보고하지 않아 GitHub Actions에서 오류를 확인할 수 있다.
+        raise RuntimeError("예약 페이지 확인 실패: " + "; ".join(errors))
 
     # --------------------------------------------------------
     # 현재 상태
@@ -1089,19 +1097,11 @@ def main():
                 "Telegram 알림 전송 완료"
             )
 
-        except Exception as e:
-
-            print()
-            print(
-                f"Telegram 전송 실패 : {e}"
-            )
-
-            # ------------------------------------------------
-            # Telegram 실패 시 상태를 저장하지 않는다.
-            # 다음 실행 때 다시 알림을 받을 수 있게 한다.
-            # ------------------------------------------------
-
-            return
+        except Exception:
+            # HTTP 예외에는 bot 토큰이 포함된 URL이 노출될 수 있으므로 숨긴다.
+            # 발송 실패 시 상태는 갱신하지 않고 실행을 실패로 종료한다.
+            print("Telegram 전송 실패 (보안상 상세 URL 비공개)")
+            raise RuntimeError("Telegram 알림 발송 실패") from None
 
     else:
 
