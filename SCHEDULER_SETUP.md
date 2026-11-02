@@ -3,6 +3,7 @@
 ## 현재 자동 실행 (GitHub 자체)
 
 - `.github/workflows/main.yml`: UTC 매 5분의 2, 7, 12, …, 57분에 실행 시도
+- `.github/workflows/backup-monitor.yml`: UTC 매 5분의 4, 9, 14, …, 59분에 예비 실행을 시도 (GitHub 서버의 동일한 누락·지연 가능성은 남음)
 - `workflow_dispatch`: 외부 예약 서비스 및 GitHub Actions 화면에서 수동 실행 가능
 - 중복 실행 방지: `concurrency`로 같은 예약 감시의 실행 겹침을 제한
 - 상태가 이전과 같으면 `alert_state.json`을 다시 저장하지 않음
