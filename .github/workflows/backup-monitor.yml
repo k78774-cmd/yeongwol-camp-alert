@@ -6,6 +6,11 @@ on:
   schedule:
     - cron: '4/5 * * * *'
   workflow_dispatch:
+  # 예비 감시 설정이 수정되면 운영 환경에서 한 번 즉시 검증
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/backup-monitor.yml'
 
 permissions:
   contents: write
