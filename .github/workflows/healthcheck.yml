@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '17 23 * * *' # 한국시간 오전 8:17
   workflow_dispatch:
+  # 코드 변경 직후에도 실제 Telegram 점검 흐름을 한 번 검증한다.
+  push:
+    branches: [main]
+    paths:
+      - 'healthcheck.py'
+      - '.github/workflows/healthcheck.yml'
 
 permissions:
   actions: read
