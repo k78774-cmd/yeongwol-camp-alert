@@ -4,7 +4,7 @@ on:
   # GitHub 자체 cron은 지연·누락될 수 있으므로 외부 무료 스케줄러로
   # workflow_dispatch를 추가 호출할 수 있게 유지한다.
   schedule:
-    - cron: '2 * * * *'
+    - cron: '2/5 * * * *'
   workflow_dispatch:
   # 소스가 반영되면 한 번 즉시 검증한다. 상태 파일 커밋은 재실행하지 않는다.
   push:
