@@ -179,10 +179,19 @@ def is_saturday(year, month, day):
     return date_obj.weekday() == 5
 
 
-def is_monitored_date(year, month, day):
-    """기존 토요일과 별도로 지정한 숙박일을 함께 감시한다."""
+def is_monitored_date(year, month, day, today=None):
+    """토요일은 기존대로 감시하고 특별 지정일은 해당 날짜까지만 감시한다."""
+    if is_saturday(year, month, day):
+        return True
+
     date_string = f"{year:04d}-{month:02d}-{day:02d}"
-    return is_saturday(year, month, day) or date_string in SPECIAL_WATCH_DATES
+    if date_string not in SPECIAL_WATCH_DATES:
+        return False
+
+    if today is None:
+        today = datetime.now(timezone(timedelta(hours=9))).date()
+
+    return datetime(year, month, day).date() >= today
 
 
 # ============================================================
