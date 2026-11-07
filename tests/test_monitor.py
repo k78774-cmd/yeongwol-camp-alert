@@ -30,6 +30,32 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(monitor.is_saturday(2026, 11, 7))
         self.assertFalse(monitor.is_saturday(2026, 11, 8))
 
+    def test_christmas_2026_watched_even_though_it_is_friday(self):
+        self.assertFalse(monitor.is_saturday(2026, 12, 25))
+        self.assertTrue(monitor.is_monitored_date(2026, 12, 25))
+        self.assertTrue(monitor.is_monitored_date(2026, 12, 26))
+        self.assertFalse(monitor.is_monitored_date(2026, 12, 24))
+        self.assertFalse(monitor.is_monitored_date(2027, 12, 25) if not monitor.is_saturday(2027, 12, 25) else False)
+
+    def test_all_14_lodgings_on_christmas_and_ignore_other_weekday(self):
+        facilities = sorted(monitor.FACILITIES)
+        christmas = "".join(
+            f'<a class="apply_btn p-on" onclick="reserve()">{name}</a>'
+            for name in facilities
+        )
+        html = (
+            f"<table><tr><td>24 {christmas}</td></tr>"
+            f"<tr><td>25 {christmas}</td></tr></table>"
+        )
+        response = Mock(status_code=200, text=html)
+        with patch("monitor.requests.get", return_value=response):
+            result = monitor.check_month(2026, 12)
+        self.assertEqual(len(result), 14)
+        self.assertEqual(
+            set(result),
+            {("2026-12-25", name) for name in facilities},
+        )
+
     def test_unchanged_state_never_writes_commit(self):
         fake_get = Mock(status_code=200)
         fake_get.json.return_value = {
