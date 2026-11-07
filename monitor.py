@@ -56,6 +56,10 @@ FACILITIES = {
     "카라반-5",
 }
 
+# 2026년 크리스마스: 금요일이지만 모든 기존 숙박시설을 추가 감시한다.
+# 일반데크는 동절기 미운영 시설로 기존처럼 제외한다.
+SPECIAL_WATCH_DATES = {"2026-12-25"}
+
 
 # ============================================================
 # 진단용 설정
@@ -173,6 +177,12 @@ def is_saturday(year, month, day):
     # 일요일 = 6
 
     return date_obj.weekday() == 5
+
+
+def is_monitored_date(year, month, day):
+    """기존 토요일과 별도로 지정한 숙박일을 함께 감시한다."""
+    date_string = f"{year:04d}-{month:02d}-{day:02d}"
+    return is_saturday(year, month, day) or date_string in SPECIAL_WATCH_DATES
 
 
 # ============================================================
@@ -442,7 +452,7 @@ def check_month(year, month):
     # 진단용
     weekday_available_count = 0
 
-    saturday_count = 0
+    monitored_date_count = 0
 
     # ========================================================
     # 실제 달력은 td 단위로 확인
@@ -482,19 +492,19 @@ def check_month(year, month):
             f"{day:02d}"
         )
 
-        saturday = is_saturday(
+        monitored = is_monitored_date(
             year,
             month,
             day
         )
 
-        if saturday:
+        if monitored:
 
-            saturday_count += 1
+            monitored_date_count += 1
 
             print()
             print(
-                f"토요일 발견 : {date_string}"
+                f"감시 날짜 발견 : {date_string}"
             )
 
         # ----------------------------------------------------
@@ -525,12 +535,12 @@ def check_month(year, month):
             )
 
             # ------------------------------------------------
-            # 평일 진단
+            # 비감시 날짜 진단
             #
             # 평일에도 실제 예약 가능한 시설이 있는지 확인
             # ------------------------------------------------
 
-            if not saturday and DEBUG_WEEKDAY:
+            if not monitored and DEBUG_WEEKDAY:
 
                 if available:
 
@@ -543,10 +553,10 @@ def check_month(year, month):
                     )
 
             # ------------------------------------------------
-            # 토요일
+            # 감시 날짜
             # ------------------------------------------------
 
-            if saturday:
+            if monitored:
 
                 # 상태 진단
                 print_debug_element(
@@ -569,10 +579,10 @@ def check_month(year, month):
                         )
 
         # ----------------------------------------------------
-        # 토요일 예약 가능 시설 추가
+        # 감시 날짜 예약 가능 시설 추가
         # ----------------------------------------------------
 
-        if saturday:
+        if monitored:
 
             for result in cell_available:
 
@@ -597,7 +607,7 @@ def check_month(year, month):
     print()
     print(
         f"{year}-{month:02d} "
-        f"토요일 수 : {saturday_count}개"
+        f"감시 날짜 수 : {monitored_date_count}개"
     )
 
     if DEBUG_WEEKDAY:
@@ -610,7 +620,7 @@ def check_month(year, month):
 
     print(
         f"{year}-{month:02d} "
-        f"토요일 예약 가능 시설 : "
+        f"감시 날짜 예약 가능 시설 : "
         f"{len(results)}개"
     )
 
@@ -859,7 +869,7 @@ def main():
     print("=" * 70)
 
     print(
-        "조건 : 토요일만 Telegram 알림"
+        "조건 : 매주 토요일 + 2026-12-25 Telegram 알림"
     )
 
     print(
@@ -882,7 +892,7 @@ def main():
     )
 
     print(
-        "평일 : 상태 진단만 실시"
+        "나머지 평일 : 상태 진단만 실시"
     )
 
     print("=" * 70)
@@ -971,7 +981,7 @@ def main():
     print("=" * 70)
 
     print(
-        "현재 토요일 예약 가능 상태"
+        "현재 감시 날짜 예약 가능 상태"
     )
 
     print("=" * 70)
@@ -988,7 +998,7 @@ def main():
     else:
 
         print(
-            "현재 토요일 예약 가능한 시설 없음"
+            "현재 감시 날짜 예약 가능한 시설 없음"
         )
 
     # --------------------------------------------------------
@@ -1075,7 +1085,7 @@ def main():
             message_lines.append("")
 
         message_lines.append(
-            "토요일만 알림"
+            "매주 토요일 + 2026-12-25 특별 감시"
         )
 
         message_lines.append(
