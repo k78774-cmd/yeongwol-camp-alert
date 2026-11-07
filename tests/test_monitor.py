@@ -36,6 +36,9 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(monitor.is_monitored_date(2026, 12, 26))
         self.assertFalse(monitor.is_monitored_date(2026, 12, 24))
         self.assertFalse(monitor.is_monitored_date(2027, 12, 24))
+        from datetime import date
+        self.assertTrue(monitor.is_monitored_date(2026, 12, 25, today=date(2026, 12, 25)))
+        self.assertFalse(monitor.is_monitored_date(2026, 12, 25, today=date(2026, 12, 26)))
 
     def test_all_14_lodgings_on_christmas_and_ignore_other_weekday(self):
         facilities = sorted(monitor.FACILITIES)
